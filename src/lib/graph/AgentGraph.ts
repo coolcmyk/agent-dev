@@ -17,6 +17,7 @@ import { AnswerAgent, AnswerOutput } from '@/lib/agent/AnswerAgent';
 import { ExecutionContext } from '@/lib/runtime/ExecutionContext';
 import { Logging } from '@/lib/utils/Logging';
 
+import { profileAsync } from '@/lib/utils/Profiler';
 /**
  * Enhanced LangGraph-based orchestration with classification routing
  * Flow: classify → [productivity OR answer OR (plan → browse → validate)] → complete
@@ -59,17 +60,25 @@ export class AgentGraph {
    * Initialize all agents - must be called before using the graph
    */
   async initialize(): Promise<void> {
-    // Initialize all agents
-    await Promise.all([
-      this.classificationAgent.initialize(),
-      this.plannerAgent.initialize(),
-      this.browseAgent.initialize(),
-      this.productivityAgent.initialize(),
-      this.validatorAgent.initialize(),
-      this.answerAgent.initialize()
-    ]);
-    
-    Logging.log('AgentGraph', '✅ All agents initialized successfully');
+    await profileAsync('AgentGraph.initialize', async () => {
+      // Pre-warm shared resources first
+      await Promise.all([
+        this.executionContext.pipeline.getLLM(),
+        this.executionContext.pipeline.getBrowserState()
+      ]);
+      
+      // Initialize all agents in parallel (they don't depend on each other)
+      await Promise.all([
+        this.classificationAgent.initialize(),
+        this.plannerAgent.initialize(),
+        this.browseAgent.initialize(),
+        this.productivityAgent.initialize(),
+        this.validatorAgent.initialize(),
+        this.answerAgent.initialize()
+      ]);
+      
+      Logging.log('AgentGraph', '✅ All agents initialized in parallel with pre-warmed cache');
+    });
   }
   
   /**

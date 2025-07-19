@@ -464,20 +464,33 @@ export abstract class BaseAgent
   }
 
   /**
-   * Get LLM provider using current user settings
-   * This method creates the LLM fresh each time to ensure latest settings are used
+   * Get LLM provider using shared pipeline for caching
    * @returns Promise resolving to configured LLM provider
    */
   protected async getLLM(): Promise<BaseChatModel> {
     try {
-      const llm = await LangChainProviderFactory.createLLM();
-
-      return llm;
+      // Use shared pipeline for caching
+      return await this.executionContext.pipeline.getLLM();
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
       this.log(`Failed to create LLM provider: ${errorMessage}`, "error");
       throw new Error(`LLM provider creation failed: ${errorMessage}`);
+    }
+  }
+
+  /**
+   * Get browser state using shared pipeline for caching
+   * @param forceRefresh - Whether to force refresh the cache
+   * @returns Promise resolving to browser state string
+   */
+  protected async getBrowserState(forceRefresh = false): Promise<string> {
+    try {
+      return await this.executionContext.pipeline.getBrowserState(forceRefresh);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.log(`Failed to get browser state: ${errorMessage}`, "error");
+      // Fallback to direct method
+      return await this.browserContext.getBrowserStateString();
     }
   }
 
@@ -552,30 +565,28 @@ export abstract class BaseAgent
   ): Promise<void> {
     try {
       if (event.event === "on_chat_model_end") {
-        // on_chat_model_end is called when the chat model is done
-        // This could either AIChunk message -- which is AI thinking; where content is present
-        // This could also be AI calling the tool -- which is AI calling the tool where content is not present
-        // we want to extract the output of that message and add to our message manager
-        // Tip: Put breakpoint here to see how the event looks like
-
         if (event.data?.output instanceof AIMessageChunk) {
           this.executionContext.messageManager.addAIMessage(
             event.data?.output.text
           );
         }
       } else if (event.event === "on_tool_end") {
-        // on_tool_end is called when a tool is executed
-        // we want to extract the output of that message and add to our message manager
-        // Tip: Put breakpoint here to see how the event looks like
-
         const output = event.data?.output;
         const toolName = event.name || "unknown";
 
-        if (
-          output &&
-          streamEventProcessor &&
-          "getActionResults" in streamEventProcessor
-        ) {
+        // Check if this tool might have changed the page state
+        const pageChangingTools = [
+          'click', 'navigate', 'type', 'scroll', 'select_option', 
+          'press_key', 'wait_for_element', 'interact'
+        ];
+        
+        if (pageChangingTools.some(tool => toolName.includes(tool))) {
+          // Invalidate browser state cache since page might have changed
+          this.executionContext.pipeline.invalidateCache();
+          this.log(`Invalidated browser state cache after ${toolName}`, 'info');
+        }
+
+        if (output && streamEventProcessor && "getActionResults" in streamEventProcessor) {
           const actionResults = streamEventProcessor.getActionResults();
 
           // Find the most recent ActionResult for this tool

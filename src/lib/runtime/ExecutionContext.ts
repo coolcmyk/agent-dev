@@ -2,6 +2,7 @@ import { z } from 'zod'
 import BrowserContext from '../browser/BrowserContextV2'
 import MessageManager from '@/lib/runtime/MessageManager'
 import { StreamEventBus } from '@/lib/events'
+import { ExecutionPipeline } from './ExecutionPipeline'
 
 /**
  * Configuration options for ExecutionContext
@@ -20,6 +21,7 @@ export type ExecutionContextOptions = z.infer<typeof ExecutionContextOptionsSche
  * Agent execution context containing browser context, message manager, and control state
  */
 export class ExecutionContext {
+  private _pipeline: ExecutionPipeline | null = null;
   abortController: AbortController  // Abort controller for task cancellation
   browserContext: BrowserContext  // Browser context for page operations
   messageManager: MessageManager  // Message manager for communication
@@ -126,5 +128,17 @@ export class ExecutionContext {
     this._lockedTabId = null;
     this.userInitiatedCancel = false;
   }
+
+  get pipeline(): ExecutionPipeline {
+    if (!this._pipeline) {
+      this._pipeline = new ExecutionPipeline(this);
+    }
+    return this._pipeline;
+  }
+  
+  cleanup(): void {
+    this._pipeline?.cleanup();
+    this._pipeline = null;
+    // ...existing cleanup code...
+  }
 }
- 
