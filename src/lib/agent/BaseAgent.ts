@@ -485,11 +485,13 @@ export abstract class BaseAgent
    */
   protected async getBrowserState(forceRefresh = false): Promise<string> {
     try {
-      return await this.executionContext.pipeline.getBrowserState(forceRefresh);
+      // Force refresh if we're in debug mode or if explicitly requested
+      const shouldForceRefresh = forceRefresh || this.debugMode;
+      return await this.executionContext.pipeline.getBrowserState(shouldForceRefresh);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.log(`Failed to get browser state: ${errorMessage}`, "error");
-      // Fallback to direct method
+      // Fallback to direct method with fresh data
       return await this.browserContext.getBrowserStateString();
     }
   }
@@ -565,25 +567,39 @@ export abstract class BaseAgent
   ): Promise<void> {
     try {
       if (event.event === "on_chat_model_end") {
+        // on_chat_model_end is called when the chat model is done
+        // This could either AIChunk message -- which is AI thinking; where content is present
+        // This could also be AI calling the tool -- which is AI calling the tool where content is not present
+        // we want to extract the output of that message and add to our message manager
+        // Tip: Put breakpoint here to see how the event looks like
         if (event.data?.output instanceof AIMessageChunk) {
           this.executionContext.messageManager.addAIMessage(
             event.data?.output.text
           );
         }
       } else if (event.event === "on_tool_end") {
+        // on_tool_end is called when a tool is executed
+        // we want to extract the output of that message and add to our message manager
+        // Tip: Put breakpoint here to see how the event looks like
         const output = event.data?.output;
         const toolName = event.name || "unknown";
 
-        // Check if this tool might have changed the page state
+        // Check if tool output indicates element detection issues
+        const outputStr = typeof output === "string" ? output : JSON.stringify(output);
+        const hasElementIssues = outputStr.toLowerCase().includes("no clickable elements") ||
+                                outputStr.toLowerCase().includes("element not found") ||
+                                outputStr.toLowerCase().includes("no elements found");
+
+        // Expand the list of page-changing tools
         const pageChangingTools = [
           'click', 'navigate', 'type', 'scroll', 'select_option', 
-          'press_key', 'wait_for_element', 'interact'
+          'press_key', 'wait_for_element', 'interact', 'search_text'
         ];
         
-        if (pageChangingTools.some(tool => toolName.includes(tool))) {
-          // Invalidate browser state cache since page might have changed
+        if (pageChangingTools.some(tool => toolName.toLowerCase().includes(tool.toLowerCase())) || hasElementIssues) {
+          // Invalidate browser state cache since page might have changed or elements not detected
           this.executionContext.pipeline.invalidateCache();
-          this.log(`Invalidated browser state cache after ${toolName}`, 'info');
+          this.log(`Invalidated browser state cache after ${toolName}${hasElementIssues ? ' (element detection issue)' : ''}`, 'info');
         }
 
         if (output && streamEventProcessor && "getActionResults" in streamEventProcessor) {

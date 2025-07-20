@@ -139,6 +139,5 @@ export class ExecutionContext {
   cleanup(): void {
     this._pipeline?.cleanup();
     this._pipeline = null;
-    // ...existing cleanup code...
   }
 }

@@ -1,4 +1,3 @@
-
 import { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { LangChainProviderFactory } from "@/lib/llm";
 import { ExecutionContext } from "@/lib/runtime/ExecutionContext";
@@ -12,7 +11,7 @@ export class ExecutionPipeline {
     url: string;
     hash: string;
   } | null = null;
-  private readonly CACHE_TTL = 5000; // 5 seconds
+  private readonly CACHE_TTL = 3000; // Reduce to 3 seconds for more frequent refreshes
   
   constructor(private executionContext: ExecutionContext) {}
   
@@ -27,7 +26,13 @@ export class ExecutionPipeline {
     const currentPage = await this.executionContext.browserContext.getCurrentPage();
     const currentUrl = currentPage.url();
     const currentTitle = await currentPage.title();
-    const currentHash = `${currentUrl}_${currentTitle}`;
+    
+    // Get a more comprehensive hash that includes DOM changes
+    // Access the underlying Playwright page for evaluate method
+    const playwrightPage = currentPage.page; // or however you access the underlying page
+    const bodyHeight = await playwrightPage?.evaluate(() => document.body.scrollHeight).catch(() => 0) || 0;
+    const elementCount = await playwrightPage?.evaluate(() => document.querySelectorAll('*').length).catch(() => 0) || 0;
+    const currentHash = `${currentUrl}_${currentTitle}_${bodyHeight}_${elementCount}`;
     const now = Date.now();
     
     // Use cache if valid and same page
