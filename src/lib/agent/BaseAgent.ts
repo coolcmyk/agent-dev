@@ -15,53 +15,33 @@ import { LangChainProviderFactory } from "@/lib/llm";
 import { ExecutionContext } from "@/lib/runtime/ExecutionContext";
 import { BaseMessage } from "@langchain/core/messages";
 import { profileStart, profileEnd } from "@/lib/utils/Profiler";
-
-// Import streaming components
 import { StreamEventBus } from "@/lib/events";
 import { StreamEventProcessor } from "../events/StreamEventProcessor";
-// Removed deprecated IStreamProcessor import
 import { ToolRegistry } from "@/lib/tools/base/ToolRegistry";
 import BrowserContext from "../browser/BrowserContext";
 import { getDomainFromUrl } from "../browser/Utils";
 import { Runnable } from "@langchain/core/runnables";
 import { RunnableConfig } from "@langchain/core/runnables";
 
-/**
- * Input schema for agent execution
- */
-export const AgentInputSchema = z.object({
-  instruction: z.string(), // The task instruction
-  // Additional context you can pass -- different agents pass different additional context -- like BrowserAgent passes browserState, ProductivityAgent passes selectedTabIds, etc.
-  context: z.record(z.unknown()).optional(),
-  browserState: z.record(z.unknown()).optional(), // Current browser state
-});
+//refactoring schemas => moving it to agent/schemas
+import {
+  AgentInputSchema,
+  AgentOutputSchema,
+  AgentOptionsSchema
+} from "./schemas/base/BaseSchemas"
 
 export type AgentInput = z.infer<typeof AgentInputSchema>;
-
-/**
- * Base output schema that all agents must conform to
- */
-export const AgentOutputSchema = z.object({
-  success: z.boolean(), // Whether the execution completed successfully
-  result: z.unknown(), // Agent-specific result data
-  error: z.string().optional(), // Error message if failed
-  metadata: z.record(z.unknown()).optional(), // Additional metadata
-});
-
 export type AgentOutput = z.infer<typeof AgentOutputSchema>;
-
-/**
- * Base configuration options for agents
- */
-export const AgentOptionsSchema = z.object({
-  executionContext: z.instanceof(ExecutionContext), // Execution context instance
-  systemPrompt: z.string().optional(), // Optional custom system prompt
-  maxIterations: z.number().int().positive().default(10), // Maximum iterations for ReAct agents
-  useVision: z.boolean().default(false), // Whether to enable vision
-  debugMode: z.boolean().default(false), // Debug logging
-});
-
 export type AgentOptions = z.infer<typeof AgentOptionsSchema>;
+
+
+//refactoring configs => moving it to agent/config
+
+import {
+  BASE_AGENT,
+  BASE_AGENT_STREAMING
+} from "./config/base/BaseConfig"
+
 
 /**
  * Interface for all agent types - now extends Runnable for LangGraph compatibility
@@ -99,11 +79,10 @@ export abstract class BaseAgent
   implements IAgent
 {
   protected readonly options: AgentOptions;
-  protected readonly executionContext: ExecutionContext; // Execution context from options
+  protected readonly executionContext: ExecutionContext;
   protected readonly browserContext: BrowserContext;
 
-  // LangChain namespace requirement
-  lc_namespace = ["nxtscape", "agents"];
+  lc_namespace = BASE_AGENT.LANGCHAIN_NAMESPACE;
 
   // These get set during initialize()
   protected systemPrompt!: string;
@@ -635,5 +614,14 @@ export abstract class BaseAgent
     } catch (error) {
       this.log(`Failed to cleanup browser context: ${error}`, "error");
     }
+  }
+
+  private isAbortError(error: unknown, errorMessage: string): boolean {
+  if (!(error instanceof Error)) return false;
+  
+  return error.name === "AbortError" || 
+    BASE_AGENT.ABORT_ERROR_PATTERNS.some(pattern => 
+      errorMessage.includes(pattern)
+    );
   }
 }
