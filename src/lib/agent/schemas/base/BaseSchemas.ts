@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ExecutionContext } from '@/lib/runtime/ExecutionContext';
 
 /**
  * Input schema for agent execution

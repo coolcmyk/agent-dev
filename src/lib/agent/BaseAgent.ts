@@ -34,15 +34,16 @@ export type AgentInput = z.infer<typeof AgentInputSchema>;
 export type AgentOutput = z.infer<typeof AgentOutputSchema>;
 export type AgentOptions = z.infer<typeof AgentOptionsSchema>;
 
-
 //refactoring configs => moving it to agent/config
-
 import {
   BASE_AGENT,
   BASE_AGENT_STREAMING
 } from "./config/base/BaseConfig"
 
-
+//rely on heavy oop-based strat for producing agents
+import {
+  
+}
 /**
  * Interface for all agent types - now extends Runnable for LangGraph compatibility
  *
@@ -81,7 +82,12 @@ export abstract class BaseAgent
   protected readonly options: AgentOptions;
   protected readonly executionContext: ExecutionContext;
   protected readonly browserContext: BrowserContext;
-
+  
+  // Composition instead of inheritance
+  protected toolSet: IToolSet;
+  protected promptStrategy: IPromptStrategy;
+  protected executionStrategy: IExecutionStrategy;
+  
   lc_namespace = BASE_AGENT.LANGCHAIN_NAMESPACE;
 
   // These get set during initialize()
@@ -107,8 +113,18 @@ export abstract class BaseAgent
     this.executionContext = this.options.executionContext;
     this.browserContext = this.executionContext.browserContext;
     this.debugMode = this.options.debugMode || this.executionContext.debugMode;
+    
+    // Initialize strategies through factory methods
+    this.toolSet = this.createToolSet();
+    this.promptStrategy = this.createPromptStrategy();
+    this.executionStrategy = this.createExecutionStrategy();
   }
-
+  
+  // Factory methods for subclasses to override
+  protected abstract createToolSet(): IToolSet;
+  protected abstract createPromptStrategy(): IPromptStrategy;
+  protected abstract createExecutionStrategy(): IExecutionStrategy;
+  
   /**
    * Initialize the agent by calling virtual methods to set up tools and system prompt
    * This must be called after construction before using the agent
@@ -121,8 +137,7 @@ export abstract class BaseAgent
     try {
       // Now it's safe to call virtual methods
       this.toolRegistry = this.createToolRegistry();
-      this.systemPrompt =
-        this.options.systemPrompt || this.generateSystemPrompt();
+      this.systemPrompt = this.options.systemPrompt || this.generateSystemPrompt();
 
       this.isInitialized = true;
 
@@ -154,7 +169,7 @@ export abstract class BaseAgent
    * @returns Initialization message
    */
   protected getInitializationMessage(): string {
-    return `🚀 Initializing ${this.getAgentName().toLowerCase()}...`;
+    return `${BASE_AGENT.LOG_PREFIXES.INITIALIZING} ${this.getAgentName().toLowerCase()}...`;
   }
 
   /**
@@ -181,11 +196,11 @@ export abstract class BaseAgent
 
       if (this.debugMode) {
         this.log(
-          `🚀🚀 Starting ${this.getAgentName()} execution: ${
+          `${BASE_AGENT.LOG_PREFIXES.STARTING} ${this.getAgentName()} execution: ${
             validatedInput.instruction
           }`
         );
-        this.log(`🚀🚀 Starting ${this.getAgentName()} task...`);
+        this.log(`${BASE_AGENT.LOG_PREFIXES.STARTING} ${this.getAgentName()} task...`);
       }
 
       // Execute agent-specific logic - each agent handles its own orchestration
@@ -196,7 +211,7 @@ export abstract class BaseAgent
 
       // Log completion internally for debugging
       if (this.debugMode) {
-        this.log(`✅✅ ${this.getAgentName()} completed successfully`);
+        this.log(`${BASE_AGENT.LOG_PREFIXES.COMPLETED} ${this.getAgentName()} completed successfully`);
       }
       // Removed automatic completion message - let Orchestrator handle final completion
 
@@ -211,15 +226,10 @@ export abstract class BaseAgent
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : String(error);
-      const isAbortError =
-        error instanceof Error &&
-        (error.name === "AbortError" ||
-          errorMessage.includes("Aborted") ||
-          errorMessage.includes("cancelled") ||
-          errorMessage.includes("stopped"));
+      const isAbortError = this.isAbortError(error, errorMessage);
 
       if (!isAbortError) {
-        this.log(`❌ ${this.getAgentName()} failed: ${errorMessage}`, "error");
+        this.log(`${BASE_AGENT.LOG_PREFIXES.FAILED} ${this.getAgentName()} failed: ${errorMessage}`, "error");
         // Send error message only for non-cancellation errors
         this.currentEventBus?.emitSystemError(
           errorMessage,
@@ -227,7 +237,7 @@ export abstract class BaseAgent
           this.getAgentName()
         );
         this.currentEventBus?.emitSystemMessage(
-          `❌ ${this.getAgentName()} failed: ${errorMessage}`,
+          `${BASE_AGENT.LOG_PREFIXES.FAILED} ${this.getAgentName()} failed: ${errorMessage}`,
           'error',
           this.getAgentName()
         );
@@ -279,11 +289,13 @@ export abstract class BaseAgent
     this.currentEventBus = eventBus;
     
     // CENTRALIZED STREAMING LOGIC
-    eventBus.emitThinking(
-      `🔧 Setting up ${this.getAgentName()} tools`,
-      'info',
-      this.getAgentName()
-    );
+    if (BASE_AGENT_STREAMING.EMIT_THINKING_ON_START) {
+      eventBus.emitThinking(
+        `${BASE_AGENT.TOOL_SETUP_MESSAGE} ${this.getAgentName()} tools`,
+        'info',
+        this.getAgentName()
+      );
+    }
 
     // Use the existing tool registry instead of creating a new one
     const toolRegistry = this.getToolRegistry();
@@ -320,7 +332,7 @@ export abstract class BaseAgent
         messages: messages || [new HumanMessage(instruction)],
       },
       {
-        version: "v2",
+        version: BASE_AGENT_STREAMING.VERSION,
         signal: this.executionContext.abortController.signal,
         recursionLimit: this.options.maxIterations,
         ...config,
@@ -335,7 +347,7 @@ export abstract class BaseAgent
       // Process streaming events using StreamProcessor
       for await (const event of eventStream) {
         // Check for cancellation
-        if (this.executionContext.abortController.signal.aborted) {
+        if (BASE_AGENT_STREAMING.CHECK_CANCELLATION && this.executionContext.abortController.signal.aborted) {
           wasCancelled = true;
           break;
         }
@@ -365,9 +377,7 @@ export abstract class BaseAgent
     } catch (error) {
       // Handle specific known errors
       if (error instanceof Error) {
-        if (
-          error.message.includes("ToolNode only accepts AIMessages as input")
-        ) {
+        if (error.message.includes(BASE_AGENT.KNOWN_LANGRAPH_ERROR)) {
           // Known LangGraph streaming issue that doesn't affect execution
           this.log(
             "Encountered known LangGraph streaming issue - continuing execution",
@@ -385,7 +395,9 @@ export abstract class BaseAgent
     }
 
     // Complete streaming
-    streamEventProcessor.completeStreaming();
+    if (BASE_AGENT_STREAMING.COMPLETE_ON_FINISH) {
+      streamEventProcessor.completeStreaming();
+    }
 
     // Handle cancellation
     if (wasCancelled) {
@@ -421,9 +433,7 @@ export abstract class BaseAgent
    * @returns Tool registry or undefined
    */
   protected createToolRegistry(): ToolRegistry {
-    // Default implementation returns undefined
-    // Subclasses can override to provide a tool registry
-    throw new Error("createToolRegistry must be implemented by subclasses");
+    return this.toolSet.getToolRegistry();
   }
 
   /**
@@ -482,7 +492,6 @@ export abstract class BaseAgent
       return instruction;
     }
   }
-
 
   protected async getSelectedTabsInstruction(): Promise<string> {
     const selectedTabIds =
@@ -617,11 +626,11 @@ export abstract class BaseAgent
   }
 
   private isAbortError(error: unknown, errorMessage: string): boolean {
-  if (!(error instanceof Error)) return false;
-  
-  return error.name === "AbortError" || 
-    BASE_AGENT.ABORT_ERROR_PATTERNS.some(pattern => 
-      errorMessage.includes(pattern)
-    );
+    if (!(error instanceof Error)) return false;
+    
+    return error.name === "AbortError" || 
+      BASE_AGENT.ABORT_ERROR_PATTERNS.some(pattern => 
+        errorMessage.includes(pattern)
+      );
   }
 }

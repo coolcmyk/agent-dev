@@ -25,6 +25,9 @@ import { SessionManagementTool, SessionExecutionTool } from '@/lib/tools/session
 import { NoOpTool, TerminateTool, GetDateTool } from '@/lib/tools/utility';
 import { GetSelectedTabsTool } from '@/lib/tools/tab';
 import { GetHistoryTool, StatsHistoryTool } from '@/lib/tools/history';
+import { IToolSet, ToolSetFactory } from "./toolsets/ToolSetManager";
+import { IPromptStrategy, PromptStrategyFactory } from "./prompts/PromptStrategy";
+import { IExecutionStrategy, ReactExecutionStrategy } from "./execution/ExecutionStrategy";
 
 /**
  * Productivity agent output schema
@@ -111,7 +114,32 @@ export class ProductivityAgent extends BaseAgent {
    * @returns Agent name
    */
   protected getAgentName(): string {
-    return "ProductivityAgent";
+    return 'ProductivityAgent';
+  }
+  
+  /**
+   * Override: Create tool set for the agent
+   * @returns IToolSet with productivity tools
+   */
+  protected createToolSet(): IToolSet {
+    return ToolSetFactory.createToolSet('productivity', this.executionContext);
+  }
+  
+  /**
+   * Override: Create prompt strategy for the agent
+   * @returns IPromptStrategy for productivity agent
+   */
+  protected createPromptStrategy(): IPromptStrategy {
+    const toolDocs = this.toolSet?.getToolRegistry().generateSystemPrompt() || '';
+    return PromptStrategyFactory.createStrategy('productivity', toolDocs);
+  }
+  
+  /**
+   * Override: Create execution strategy for the agent
+   * @returns IExecutionStrategy for productivity agent
+   */
+  protected createExecutionStrategy(): IExecutionStrategy {
+    return new ReactExecutionStrategy();
   }
 
   /**

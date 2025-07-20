@@ -9,8 +9,7 @@
 // Base agent
 export {
   BaseAgent as LangChainBaseAgent,
-  AgentOptions as LangChainAgentOptions,
-  AgentOptionsSchema as LangChainAgentOptionsSchema,
+  AgentOptions as LangChainAgentOptions
 } from "./BaseAgent";
 
 // Productivity agent
