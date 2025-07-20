@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events';
 import { z } from 'zod';
 import { Logging } from '@/lib/utils/Logging';
+import { BaseComponent, IEventHandler, IEventMiddleware } from '../core/interfaces';
 
 /**
  * Stream event types for the unified event system
@@ -118,13 +119,15 @@ export type EventListener<T = StreamEvent> = (event: T) => void | Promise<void>;
 export type EventFilter = (event: StreamEvent) => boolean;
 
 /**
- * EventBus for streaming events with replay capability
+ * Enhanced EventBus for streaming events with middleware support and plugin architecture
  */
 export class StreamEventBus extends EventEmitter {
   private eventBuffer: StreamEvent[] = [];
   private bufferSize: number;
   private debugMode: boolean;
   private eventCounter: number = 0;
+  private middlewares: IEventMiddleware[] = [];
+  private eventHandlers = new Map<string, IEventHandler[]>();
 
   constructor(options: { bufferSize?: number; debugMode?: boolean } = {}) {
     super();
@@ -134,21 +137,74 @@ export class StreamEventBus extends EventEmitter {
   }
 
   /**
-   * Emit a stream event
+   * Add middleware to the event processing pipeline
    */
-  emitStreamEvent(event: Omit<StreamEvent, 'id' | 'timestamp'>): boolean {
+  addMiddleware(middleware: IEventMiddleware): void {
+    this.middlewares.push(middleware);
+    if (this.debugMode) {
+      Logging.log('StreamEventBus', `Added middleware: ${middleware.constructor.name}`, 'info');
+    }
+  }
+
+  /**
+   * Remove middleware from the pipeline
+   */
+  removeMiddleware(middleware: IEventMiddleware): void {
+    const index = this.middlewares.indexOf(middleware);
+    if (index > -1) {
+      this.middlewares.splice(index, 1);
+      if (this.debugMode) {
+        Logging.log('StreamEventBus', `Removed middleware: ${middleware.constructor.name}`, 'info');
+      }
+    }
+  }
+
+  /**
+   * Subscribe an event handler for specific event types
+   */
+  subscribe<T>(eventType: string, handler: IEventHandler<T>): void {
+    const existing = this.eventHandlers.get(eventType) || [];
+    this.eventHandlers.set(eventType, [...existing, handler]);
+    
+    if (this.debugMode) {
+      Logging.log('StreamEventBus', `Subscribed handler for: ${eventType}`, 'info');
+    }
+  }
+
+  /**
+   * Unsubscribe an event handler
+   */
+  unsubscribe<T>(eventType: string, handler: IEventHandler<T>): void {
+    const existing = this.eventHandlers.get(eventType) || [];
+    const filtered = existing.filter(h => h !== handler);
+    this.eventHandlers.set(eventType, filtered);
+    
+    if (this.debugMode) {
+      Logging.log('StreamEventBus', `Unsubscribed handler for: ${eventType}`, 'info');
+    }
+  }
+
+  /**
+   * Emit a stream event with middleware processing
+   */
+  async emitStreamEvent(event: Omit<StreamEvent, 'id' | 'timestamp'>): Promise<boolean> {
     // Add ID and timestamp
-    const completeEvent: StreamEvent = {
+    let completeEvent: StreamEvent = {
       ...event,
       id: this.generateEventId(),
       timestamp: Date.now()
     };
 
-    // Validate event
     try {
+      // Apply middlewares
+      for (const middleware of this.middlewares) {
+        completeEvent = await middleware.process(completeEvent.type, completeEvent);
+      }
+
+      // Validate event
       StreamEventSchema.parse(completeEvent);
     } catch (error) {
-      Logging.log('StreamEventBus', `Invalid event: ${error}`, 'error');
+      Logging.log('StreamEventBus', `Event processing failed: ${error}`, 'error');
       return false;
     }
 
@@ -160,13 +216,34 @@ export class StreamEventBus extends EventEmitter {
       Logging.log('StreamEventBus', `Emitting ${completeEvent.type} event`, 'info');
     }
 
-    // Emit to type-specific listeners
+    // Process with event handlers
+    await this.processEventHandlers(completeEvent);
+
+    // Emit to traditional listeners
     super.emit(completeEvent.type, completeEvent);
-    
-    // Emit to wildcard listeners
     super.emit('*', completeEvent);
 
     return true;
+  }
+
+  /**
+   * Process event using registered handlers
+   */
+  private async processEventHandlers(event: StreamEvent): Promise<void> {
+    const handlers = this.eventHandlers.get(event.type) || [];
+    const wildcardHandlers = this.eventHandlers.get('*') || [];
+    
+    const allHandlers = [...handlers, ...wildcardHandlers];
+    
+    for (const handler of allHandlers) {
+      if (handler.canHandle(event)) {
+        try {
+          await handler.handle(event);
+        } catch (error) {
+          Logging.log('StreamEventBus', `Error in event handler: ${error}`, 'error');
+        }
+      }
+    }
   }
 
   /**
