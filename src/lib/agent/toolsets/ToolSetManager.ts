@@ -1,5 +1,5 @@
 import { ExecutionContext } from "@/lib/runtime/ExecutionContext";
-import { ToolRegistry } from "@/lib/tools/core/ToolPlugin";
+import { ToolRegistry } from "@/lib/tools/base/ToolRegistry";
 import { ProductivityPlugin } from "@/lib/tools/plugins/ProductivityPlugin";
 import { AnswerPlugin } from "@/lib/tools/plugins/AnswerPlugin";
 import { BrowsePlugin } from "@/lib/tools/plugins/BrowsePlugin";

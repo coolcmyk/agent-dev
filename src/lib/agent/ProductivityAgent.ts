@@ -54,62 +54,6 @@ export class ProductivityAgent extends BaseAgent {
   }
 
   /**
-   * Override: Create tool registry for the agent
-   * @returns ToolRegistry with productivity tools
-   */
-  protected createToolRegistry(): ToolRegistry {
-    Logging.log(
-      "ProductivityAgent",
-      "🔧 Creating ToolRegistry with ALL productivity tools (including TabOperationsTool)",
-      "info"
-    );
-    const registry = new ToolRegistry();
-
-    // Register productivity tools
-    registry.registerAll([
-      new TabOperationsTool(this.executionContext),
-      new GroupTabsTool(this.executionContext),
-
-      new GetSelectedTabsTool(this.executionContext),
-      new NoOpTool(this.executionContext),
-      new TerminateTool(this.executionContext),
-      new GetDateTool(this.executionContext),
-      new SessionManagementTool(this.executionContext),
-      new SessionExecutionTool(this.executionContext),
-      new SaveBookmarkTool(this.executionContext),
-      new BookmarkManagementTool(this.executionContext),
-      new BookmarkSearchTool(this.executionContext),
-      new BookmarksFolderTool(this.executionContext),
-      new GetHistoryTool(this.executionContext),
-      new StatsHistoryTool(this.executionContext),
-    ]);
-
-    Logging.log(
-      "ProductivityAgent",
-      "🔧 Tools registered:" +
-        registry
-          .getAll()
-          .map((t: any) => t.getConfig().name)
-          .join(", "),
-      "info"
-    );
-    return registry;
-  }
-
-  /**
-   * Override: Generate system prompt for productivity agent
-   * @returns System prompt string
-   */
-  protected generateSystemPrompt(): string {
-    // Use the tool registry to generate documentation
-    const toolDocs = this.toolRegistry?.generateSystemPrompt() || "";
-
-    // Create and use the new prompt generator
-    const promptGenerator = new ProductivityAgentPrompt(toolDocs);
-    return promptGenerator.generate();
-  }
-
-  /**
    * Override: Get the agent name for logging
    * @returns Agent name
    */
@@ -130,8 +74,8 @@ export class ProductivityAgent extends BaseAgent {
    * @returns IPromptStrategy for productivity agent
    */
   protected createPromptStrategy(): IPromptStrategy {
-    const toolDocs = this.toolSet?.getToolRegistry().generateSystemPrompt() || '';
-    return PromptStrategyFactory.createStrategy('productivity', toolDocs);
+    // The tool docs will be available after initialization
+    return PromptStrategyFactory.createStrategy('productivity', '');
   }
   
   /**

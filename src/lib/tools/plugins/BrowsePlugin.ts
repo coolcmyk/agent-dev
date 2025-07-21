@@ -1,14 +1,21 @@
 import { ExecutionContext } from "@/lib/runtime/ExecutionContext";
 import { IToolPlugin } from "../core/ToolPlugin";
-import { 
-  NavigateTool,
-  SearchTextTool,
-  InteractTool,
-  ScrollTool,
-  TakeScreenshotTool
-} from "../browser";
-import { GetSelectedTabsTool } from "../tab";
-import { NoOpTool, TerminateTool } from "../utility";
+
+// Fix the imports - use the correct tool names that match your actual tool files
+import { NavigationTool } from '@/lib/tools/browser-navigation/NavigationTool';
+import { FindElementTool } from '@/lib/tools/browser-navigation/FindElementTool';
+import { InteractionTool } from '@/lib/tools/browser-navigation/InteractionTool';
+import { ScrollTool } from '@/lib/tools/browser-navigation/ScrollTool';
+import { SearchTool } from '@/lib/tools/browser-navigation/SearchTool';
+import { TabOperationsTool } from '@/lib/tools/tab/TabOperationsTool';
+import { GetSelectedTabsTool } from "@/lib/tools/tab/GetSelectedTabsTool";
+import { NoOpTool } from "@/lib/tools/utility/NoOpTool";
+import { TerminateTool } from "@/lib/tools/utility/TerminateTool";
+
+// Add any missing tools you need
+import { ExtractTool } from '@/lib/tools/answer/ExtractTool';
+import { DoneTool } from '@/lib/tools/utility/DoneTool';
+import { WaitTool } from '@/lib/tools/utility/WaitTool';
 
 export class BrowsePlugin implements IToolPlugin {
   readonly name = 'browse';
@@ -18,19 +25,25 @@ export class BrowsePlugin implements IToolPlugin {
 
   getTools(context: ExecutionContext): any[] {
     return [
-      // Navigation and interaction
-      new NavigateTool(context),
-      new SearchTextTool(context),
-      new InteractTool(context),
+      // Navigation and interaction - use the correct class names
+      new NavigationTool(context),        // was NavigateTool
+      new SearchTool(context),           // was SearchTextTool  
+      new InteractionTool(context),      // was InteractTool
       new ScrollTool(context),
-      new TakeScreenshotTool(context),
+      new FindElementTool(context),      // add if you have screenshots
       
       // Tab operations
       new GetSelectedTabsTool(context),
+      new TabOperationsTool(context),
       
       // Utility
       new NoOpTool(context),
       new TerminateTool(context),
+      new DoneTool(context),
+      new WaitTool(context),
+      
+      // Answer tools
+      new ExtractTool(context),
     ];
   }
 

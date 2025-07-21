@@ -1,3 +1,8 @@
+import { BaseAgent, AgentOptions } from "../BaseAgent";
+import { BaseChatModel } from "@langchain/core/language_models/chat_models";
+import { LangChainProviderFactory } from "@/lib/llm";
+import { AgentFactoryRegistry } from "../factory/AgentFactory";
+
 export class AgentCache {
   private static instances = new Map<string, BaseAgent>();
   private static llmCache = new Map<string, BaseChatModel>();

@@ -41,9 +41,10 @@ import {
 } from "./config/base/BaseConfig"
 
 //rely on heavy oop-based strat for producing agents
-import {
-  
-}
+import { IToolSet, ToolSetFactory } from "./toolsets/ToolSetManager";
+import { IPromptStrategy, PromptStrategyFactory } from "./prompts/PromptStrategy";
+import { IExecutionStrategy, ReactExecutionStrategy } from "./execution/ExecutionStrategy";
+
 /**
  * Interface for all agent types - now extends Runnable for LangGraph compatibility
  *
@@ -103,10 +104,6 @@ export abstract class BaseAgent
   // Store current EventBus for streaming
   protected currentEventBus: StreamEventBus | null = null;
 
-  /**
-   * Creates a new instance of BaseAgent
-   * @param options - Configuration options for the agent
-   */
   constructor(options: AgentOptions) {
     super();
     this.options = AgentOptionsSchema.parse(options);
@@ -125,19 +122,15 @@ export abstract class BaseAgent
   protected abstract createPromptStrategy(): IPromptStrategy;
   protected abstract createExecutionStrategy(): IExecutionStrategy;
   
-  /**
-   * Initialize the agent by calling virtual methods to set up tools and system prompt
-   * This must be called after construction before using the agent
-   */
   public async initialize(): Promise<void> {
     if (this.isInitialized) {
       return; // Already initialized
     }
 
     try {
-      // Now it's safe to call virtual methods
-      this.toolRegistry = this.createToolRegistry();
-      this.systemPrompt = this.options.systemPrompt || this.generateSystemPrompt();
+      // Use composition objects instead of virtual methods
+      this.toolRegistry = this.toolSet.getToolRegistry();
+      this.systemPrompt = this.options.systemPrompt || this.promptStrategy.generateSystemPrompt();
 
       this.isInitialized = true;
 
@@ -429,14 +422,6 @@ export abstract class BaseAgent
   ): Promise<unknown>;
 
   /**
-   * Template method: Create tool registry for the agent
-   * @returns Tool registry or undefined
-   */
-  protected createToolRegistry(): ToolRegistry {
-    return this.toolSet.getToolRegistry();
-  }
-
-  /**
    * Template method: Create agent-specific tools
    * @returns Array of tools for the agent
    */
@@ -469,12 +454,6 @@ export abstract class BaseAgent
       throw new Error(`LLM provider creation failed: ${errorMessage}`);
     }
   }
-
-  /**
-   * Template method: Generate the system prompt for this agent
-   * @returns System prompt string
-   */
-  protected abstract generateSystemPrompt(): string;
 
   protected async enhanceInstructionWithContext(
     instruction: string

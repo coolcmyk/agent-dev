@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { NxtscapeTool } from './NxtscapeTool';
 import { ToolCategory } from './ToolConfig';
+import { ExecutionContext } from "@/lib/runtime/ExecutionContext";
 
 /**
  * Registry for managing tools
@@ -8,7 +9,11 @@ import { ToolCategory } from './ToolConfig';
 export class ToolRegistry {
   private tools: Map<string, NxtscapeTool> = new Map();
   private toolsByCategory: Map<ToolCategory, NxtscapeTool[]> = new Map();
+  private context: ExecutionContext;
 
+  constructor(context: ExecutionContext){
+    this.context = context;
+  }
   /**
    * Register a tool
    */

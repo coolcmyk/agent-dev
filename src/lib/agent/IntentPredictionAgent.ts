@@ -1,10 +1,11 @@
 import { z } from 'zod';
 import { BaseAgent, AgentOptions, AgentInput } from './BaseAgent';
-import { ToolRegistry } from '@/lib/tools/base';
+import { IToolSet, ToolSetFactory } from './toolsets/ToolSetManager';
+import { IPromptStrategy, PromptStrategyFactory } from './prompts/PromptStrategy';
+import { IExecutionStrategy, LLMOnlyExecutionStrategy } from './execution/ExecutionStrategy';
 import { Logging } from '@/lib/utils/Logging';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { RunnableConfig } from '@langchain/core/runnables';
-import { IntentPredictionPrompt } from '@/lib/prompts/IntentPredictionPrompt';
 import { withFlexibleStructuredOutput } from '@/lib/llm/utils/structuredOutput';
 
 // Schema for navigation history entry
@@ -17,11 +18,11 @@ const NavigationEntrySchema = z.object({
 // Schema for accessibility snapshot
 const AccessibilitySnapshotSchema = z.object({
   url: z.string(),
-  cleanUrl: z.string(),  // URL without query parameters
+  cleanUrl: z.string(),
   title: z.string(),
-  metaDescription: z.string().optional(),  // Meta description tag
-  ogTitle: z.string().optional(),  // Open Graph title
-  ogDescription: z.string().optional(),  // Open Graph description
+  metaDescription: z.string().optional(),
+  ogTitle: z.string().optional(),
+  ogDescription: z.string().optional(),
   headings: z.array(z.string()),
   buttons: z.array(z.string()),
   links: z.array(z.string()),
@@ -46,8 +47,8 @@ export const IntentPredictionInputSchema = z.object({
 // Intent prediction output schema
 export const IntentPredictionOutputSchema = z.object({
   success: z.boolean(),
-  intents: z.array(z.string()),  // Predicted intents
-  confidence: z.number().min(0).max(1).optional(),  // Overall confidence
+  intents: z.array(z.string()),
+  confidence: z.number().min(0).max(1).optional(),
   error: z.string().optional()
 });
 
@@ -58,41 +59,47 @@ export type IntentPredictionOutput = z.infer<typeof IntentPredictionOutputSchema
  * Agent specialized for predicting user intents based on browsing context
  */
 export class IntentPredictionAgent extends BaseAgent {
-  private prompt: IntentPredictionPrompt;
-
   constructor(options: AgentOptions) {
     super(options);
-    this.prompt = new IntentPredictionPrompt();
   }
 
   /**
-   * Override: Create tool registry for the agent (no tools needed for intent prediction)
+   * Create tool set for the agent using composition
    */
-  protected createToolRegistry(): ToolRegistry {
-    this.log('🔧 Creating empty ToolRegistry (intent prediction uses only LLM)');
-    return new ToolRegistry();
+  protected createToolSet(): IToolSet {
+    return ToolSetFactory.createToolSet('empty', this.executionContext); // No tools needed
   }
 
   /**
-   * Override: Generate system prompt for intent prediction
+   * Create prompt strategy for the agent using composition
    */
-  protected generateSystemPrompt(): string {
-    return this.prompt.generate();
+  protected createPromptStrategy(): IPromptStrategy {
+    return PromptStrategyFactory.createStrategy('intent-prediction');
   }
 
   /**
-   * Execute agent-specific logic (required by BaseAgent)
+   * Create execution strategy for the agent using composition
+   */
+  protected createExecutionStrategy(): IExecutionStrategy {
+    return new LLMOnlyExecutionStrategy(); // Intent prediction doesn't use ReAct
+  }
+
+  /**
+   * Get the agent name for logging
+   */
+  protected getAgentName(): string {
+    return 'IntentPredictionAgent';
+  }
+
+  /**
+   * Execute agent-specific logic using composition
    */
   protected async executeAgent(
     input: AgentInput,
-    callbacks?: any,
     config?: RunnableConfig
   ): Promise<unknown> {
     try {
-      // Ensure agent is initialized
-      if (!this.isInitialized) {
-        await this.initialize();
-      }
+      await this.ensureInitialized();
 
       this.log('🔮 Starting intent prediction');
 
@@ -126,13 +133,11 @@ export class IntentPredictionAgent extends BaseAgent {
         formsCount: accessibilitySnapshot.forms.length
       });
 
-      // Build prompt
-      const prompt = this.prompt.buildPredictionPrompt(tabHistory, accessibilitySnapshot);
-
-      // TODO(nithin): Similar to other agents, add system prompt to the message manager. Also, in the intent prediction
-      // message manager, keep track of which intents were predicted and which were clicked and pass that to the LLM.
-      // this.executionContext.messageManager.addSystemMessage(this.systemPrompt, 0);
-      // this.systemPromptAdded = true;
+      // Use prompt strategy to build prompt
+      const prompt = this.promptStrategy.generateUserPrompt(input.instruction, {
+        tabHistory,
+        accessibilitySnapshot
+      });
 
       // Get LLM (created lazily with latest settings)
       const llm = await this.getLLM();
@@ -143,11 +148,11 @@ export class IntentPredictionAgent extends BaseAgent {
         confidence: z.number().min(0).max(1).describe('Confidence level in the predictions (0-1)')
       });
 
-      // Create LLM with structured output using flexible schema handling
+      // Create LLM with structured output
       const structuredLLM = await withFlexibleStructuredOutput(llm, intentPredictionSchema);
 
-      // Get system prompt
-      const systemPrompt = this.generateSystemPrompt();
+      // Get system prompt from strategy
+      const systemPrompt = this.promptStrategy.generateSystemPrompt();
 
       // Add messages with system prompt
       const messages = [
@@ -186,15 +191,7 @@ export class IntentPredictionAgent extends BaseAgent {
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.log(`❌ Intent prediction failed: ${errorMessage}`, 'error');
       
-      // Don't return any intents on error - let the UI handle it
       throw error;
     }
-  }
-
-  // Removed buildPredictionPrompt, analyzePageFeatures, parseIntentResponse, and getFallbackIntents
-  // Now using structured output with withFlexibleStructuredOutput for reliable JSON parsing
-
-  protected getAgentName(): string {
-    return 'IntentPredictionAgent';
   }
 }

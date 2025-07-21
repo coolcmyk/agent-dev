@@ -1,3 +1,4 @@
+import { ExecutionContext } from "@/lib/runtime/ExecutionContext";
 import { 
     ProductivityAgentPrompt,
     BrowseAgentPrompt,
@@ -9,23 +10,34 @@ import {
 export interface IPromptStrategy {
   generateSystemPrompt(context?: any): string;
   generateUserPrompt(instruction: string, context?: any): string;
+  updateToolDocs?(toolDocs: string): void; // Optional method to update tool docs
 }
 
 export class ProductivityPromptStrategy implements IPromptStrategy {
-  constructor(private toolDocs: string) {}
+  constructor(private toolDocs: string = '') {}
+  
+  updateToolDocs(toolDocs: string): void {
+    this.toolDocs = toolDocs;
+  }
   
   generateSystemPrompt(): string {
     return new ProductivityAgentPrompt(this.toolDocs).generate();
   }
   
   generateUserPrompt(instruction: string): string {
-    return instruction; // Simple pass-through for productivity
+    return instruction;
   }
 }
 
 export class AnswerPromptStrategy implements IPromptStrategy {
+  private toolDocs: string = '';
+  
+  updateToolDocs(toolDocs: string): void {
+    this.toolDocs = toolDocs;
+  }
+  
   generateSystemPrompt(followUpContext?: any): string {
-    return `You are a web content analysis expert specialized in extracting and analyzing information from web pages.
+    const basePrompt = `You are a web content analysis expert specialized in extracting and analyzing information from web pages.
     
 Your primary responsibilities:
 1. Extract relevant information from web content
@@ -34,6 +46,11 @@ Your primary responsibilities:
 4. Handle follow-up questions and clarifications
 
 Always be precise and cite specific information when available.`;
+
+    // Include tool docs if available
+    const toolSection = this.toolDocs ? `\n\n## AVAILABLE TOOLS\n${this.toolDocs}` : '';
+    
+    return basePrompt + toolSection;
   }
   
   generateUserPrompt(instruction: string): string {
@@ -62,7 +79,11 @@ export class PlannerPromptStrategy implements IPromptStrategy {
 }
 
 export class BrowsePromptStrategy implements IPromptStrategy {
-  constructor(private toolDocs: string) {}
+  constructor(private toolDocs: string = '') {}
+  
+  updateToolDocs(toolDocs: string): void {
+    this.toolDocs = toolDocs;
+  }
   
   generateSystemPrompt(): string {
     return new BrowseAgentPrompt(this.toolDocs).generate();
