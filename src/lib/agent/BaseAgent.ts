@@ -23,6 +23,11 @@ import { getDomainFromUrl } from "../browser/Utils";
 import { Runnable } from "@langchain/core/runnables";
 import { RunnableConfig } from "@langchain/core/runnables";
 
+// Import composition interfaces
+import { IToolSet, ToolSetFactory } from "./toolsets/ToolSetManager";
+import { IPromptStrategy, PromptStrategyFactory } from "./prompts/PromptStrategy";
+import { IExecutionStrategy } from "./execution/ExecutionStrategy";
+
 //refactoring schemas => moving it to agent/schemas
 import {
   AgentInputSchema,
@@ -30,72 +35,45 @@ import {
   AgentOptionsSchema
 } from "./schemas/base/BaseSchemas"
 
+//refactoring configs => moving it to agent/config
+import { BASE_AGENT, BASE_AGENT_STREAMING } from "./config/base/BaseConfig";
+
 export type AgentInput = z.infer<typeof AgentInputSchema>;
 export type AgentOutput = z.infer<typeof AgentOutputSchema>;
 export type AgentOptions = z.infer<typeof AgentOptionsSchema>;
 
-//refactoring configs => moving it to agent/config
-import {
-  BASE_AGENT,
-  BASE_AGENT_STREAMING
-} from "./config/base/BaseConfig"
-
-//rely on heavy oop-based strat for producing agents
-import { IToolSet, ToolSetFactory } from "./toolsets/ToolSetManager";
-import { IPromptStrategy, PromptStrategyFactory } from "./prompts/PromptStrategy";
-import { IExecutionStrategy, ReactExecutionStrategy } from "./execution/ExecutionStrategy";
-
 /**
  * Interface for all agent types - now extends Runnable for LangGraph compatibility
- *
- * RunnableConfig: Runtime configuration object that controls execution behavior across LangChain components.
- * Key properties:
- * - configurable: Dynamic runtime values (e.g., {sessionId: "123", temperature: 0.7})
- * - callbacks: Event handlers for streaming, errors, and progress tracking
- * - recursionLimit: Max depth for ReAct loops (default: 25)
- * - maxConcurrency: Parallel execution limit
- * - timeout: Execution timeout in milliseconds
- * - signal: AbortSignal for cancellation
- * - tags/metadata: Tracking and debugging info
- *
- * The config propagates through the entire execution pipeline, maintaining context,
- * callbacks, and control flow. Essential for streaming, cancellation, and observability.
  */
 export interface IAgent extends Runnable<AgentInput, AgentOutput> {
-  /**
-   * Execute a task with the given input
-   * @param input - Agent input containing instruction and context
-   * @param config - Runtime configuration controlling execution behavior, callbacks, and context propagation
-   * @returns Promise resolving to structured output
-   */
   invoke(input: AgentInput, config?: RunnableConfig): Promise<AgentOutput>;
 }
 
 /**
  * Abstract base class for LangChain-based agents.
- * Uses two-phase initialization to avoid constructor virtual method call issues.
- * LLM provider is created lazily to always use the latest user settings.
+ * Uses composition pattern with lazy initialization for better performance.
  */
 export abstract class BaseAgent
   extends Runnable<AgentInput, AgentOutput>
   implements IAgent
 {
+  // ✅ Lazy initialization
+  private _toolSet: IToolSet | null = null;
+  private _promptStrategy: IPromptStrategy | null = null;
+  private _executionStrategy: IExecutionStrategy | null = null;
+
   protected readonly options: AgentOptions;
   protected readonly executionContext: ExecutionContext;
   protected readonly browserContext: BrowserContext;
-  
-  // Composition instead of inheritance
-  protected toolSet: IToolSet;
-  protected promptStrategy: IPromptStrategy;
-  protected executionStrategy: IExecutionStrategy;
-  
-  lc_namespace = BASE_AGENT.LANGCHAIN_NAMESPACE;
-
-  // These get set during initialize()
-  protected systemPrompt!: string;
-  protected toolRegistry!: ToolRegistry;
-  protected isInitialized: boolean = false;
   protected debugMode: boolean;
+
+  // ✅ Add missing properties
+  protected toolRegistry: ToolRegistry | undefined;
+  protected systemPrompt: string = '';
+  protected isInitialized: boolean = false;
+
+  // LangChain namespace requirement - ✅ Make it concrete, not abstract
+  lc_namespace = BASE_AGENT.LANGCHAIN_NAMESPACE;
 
   // State management for derived agents
   protected stateMessageAdded: boolean = false;
@@ -111,39 +89,59 @@ export abstract class BaseAgent
     this.browserContext = this.executionContext.browserContext;
     this.debugMode = this.options.debugMode || this.executionContext.debugMode;
     
-    // Initialize strategies through factory methods
-    this.toolSet = this.createToolSet();
-    this.promptStrategy = this.createPromptStrategy();
-    this.executionStrategy = this.createExecutionStrategy();
+    // ✅ Don't create immediately - use getters
   }
   
-  // Factory methods for subclasses to override
+  protected get toolSet(): IToolSet {
+    if (!this._toolSet) {
+      this._toolSet = this.createToolSet();
+    }
+    return this._toolSet;
+  }
+  
+  protected get promptStrategy(): IPromptStrategy {
+    if (!this._promptStrategy) {
+      this._promptStrategy = this.createPromptStrategy();
+    }
+    return this._promptStrategy;
+  }
+  
+  protected get executionStrategy(): IExecutionStrategy {
+    if (!this._executionStrategy) {
+      this._executionStrategy = this.createExecutionStrategy();
+    }
+    return this._executionStrategy;
+  }
+
+  // ✅ Add abstract factory methods for subclasses to implement
   protected abstract createToolSet(): IToolSet;
   protected abstract createPromptStrategy(): IPromptStrategy;
   protected abstract createExecutionStrategy(): IExecutionStrategy;
-  
+
   public async initialize(): Promise<void> {
     if (this.isInitialized) {
-      return; // Already initialized
+      return;
     }
 
     try {
-      // Use composition objects instead of virtual methods
+      // ✅ Lazy access triggers creation only when needed
       this.toolRegistry = this.toolSet.getToolRegistry();
+      
+      // ✅ Update tool docs efficiently
+      const toolDocs = this.toolRegistry?.generateSystemPrompt() || '';
+      if (toolDocs && 'updateToolDocs' in this.promptStrategy) {
+        (this.promptStrategy as any).updateToolDocs(toolDocs);
+      }
+      
       this.systemPrompt = this.options.systemPrompt || this.promptStrategy.generateSystemPrompt();
 
       this.isInitialized = true;
 
       if (this.debugMode) {
-        this.log(
-          `${this.getAgentName()} initialized (LLM will be created lazily)`
-        );
+        this.log(`${this.getAgentName()} initialized (LLM will be created lazily)`);
       }
     } catch (error) {
-      this.log(
-        `Failed to initialize ${this.getAgentName()}: ${error}`,
-        "error"
-      );
+      this.log(`Failed to initialize ${this.getAgentName()}: ${error}`, "error");
       throw error;
     }
   }
@@ -167,10 +165,6 @@ export abstract class BaseAgent
 
   /**
    * Main execution method - implements Runnable interface
-   * This is called by LangGraph as a node function
-   * @param input - Agent input containing instruction and context
-   * @param config - Optional configuration for LangGraph web compatibility
-   * @returns Promise resolving to agent output
    */
   public async invoke(
     input: AgentInput,
@@ -206,7 +200,6 @@ export abstract class BaseAgent
       if (this.debugMode) {
         this.log(`${BASE_AGENT.LOG_PREFIXES.COMPLETED} ${this.getAgentName()} completed successfully`);
       }
-      // Removed automatic completion message - let Orchestrator handle final completion
 
       return {
         success: true,
@@ -223,7 +216,6 @@ export abstract class BaseAgent
 
       if (!isAbortError) {
         this.log(`${BASE_AGENT.LOG_PREFIXES.FAILED} ${this.getAgentName()} failed: ${errorMessage}`, "error");
-        // Send error message only for non-cancellation errors
         this.currentEventBus?.emitSystemError(
           errorMessage,
           error instanceof Error ? error : undefined,
@@ -249,7 +241,6 @@ export abstract class BaseAgent
         },
       };
     } finally {
-      // Clear EventBus after execution
       this.currentEventBus = null;
       profileEnd(profileLabel);
     }
@@ -257,11 +248,6 @@ export abstract class BaseAgent
 
   /**
    * Helper method for centralized streaming execution that agents can use
-   * @param agent - The created ReAct agent
-   * @param instruction - The instruction to execute
-   * @param config - Optional configuration for LangGraph web compatibility
-   * @param messages - Optional messages array
-   * @returns Object containing result and all messages
    */
   protected async executeReactAgentWithStreaming(
     agent: any,
@@ -272,16 +258,13 @@ export abstract class BaseAgent
     const profileLabel = `${this.getAgentName()}.invokeWithStreaming`;
     profileStart(profileLabel);
     
-    // Extract EventBus from ExecutionContext only - single source of truth
     const eventBus = this.executionContext.getEventBus();
     if (!eventBus) {
       throw new Error('EventBus not available in ExecutionContext - ensure setEventBus() was called');
     }
     
-    // Store EventBus for use in log() method during streaming
     this.currentEventBus = eventBus;
     
-    // CENTRALIZED STREAMING LOGIC
     if (BASE_AGENT_STREAMING.EMIT_THINKING_ON_START) {
       eventBus.emitThinking(
         `${BASE_AGENT.TOOL_SETUP_MESSAGE} ${this.getAgentName()} tools`,
@@ -290,7 +273,6 @@ export abstract class BaseAgent
       );
     }
 
-    // Use the existing tool registry instead of creating a new one
     const toolRegistry = this.getToolRegistry();
 
     if (!toolRegistry) {
@@ -305,7 +287,6 @@ export abstract class BaseAgent
       );
     }
 
-    // Initialize StreamEventProcessor with EventBus and existing tool registry
     const streamEventProcessor = new StreamEventProcessor(
       eventBus,
       toolRegistry
@@ -315,7 +296,6 @@ export abstract class BaseAgent
       this.log(`StreamEventProcessor initialized with existing tool registry`);
     }
 
-    // Check if already cancelled before starting
     if (this.executionContext.abortController.signal.aborted) {
       throw new Error("Task was cancelled before execution");
     }
@@ -337,41 +317,31 @@ export abstract class BaseAgent
     let wasCancelled = false;
 
     try {
-      // Process streaming events using StreamProcessor
       for await (const event of eventStream) {
-        // Check for cancellation
         if (BASE_AGENT_STREAMING.CHECK_CANCELLATION && this.executionContext.abortController.signal.aborted) {
           wasCancelled = true;
           break;
         }
 
-        // Delegate all event processing to StreamEventProcessor
         await streamEventProcessor.processEvent(event);
-
-        // sync langchain and message manager
         await this.syncLangchainAndMessageManager(event, streamEventProcessor);
 
-        // Extract result from any chain end event that contains messages
         if (event.event === "on_chain_end") {
           const output = event.data?.output;
 
-          // Store the first string output as a fallback in case we never see messages
           if (result === undefined && typeof output === "string") {
             result = output;
           }
 
           if (output && typeof output === "object" && Array.isArray(output.messages)) {
-            // We found the rich output that carries the full message list
             result = output;
             allMessages = output.messages;
           }
         }
       }
     } catch (error) {
-      // Handle specific known errors
       if (error instanceof Error) {
         if (error.message.includes(BASE_AGENT.KNOWN_LANGRAPH_ERROR)) {
-          // Known LangGraph streaming issue that doesn't affect execution
           this.log(
             "Encountered known LangGraph streaming issue - continuing execution",
             "info"
@@ -387,12 +357,10 @@ export abstract class BaseAgent
       }
     }
 
-    // Complete streaming
     if (BASE_AGENT_STREAMING.COMPLETE_ON_FINISH) {
       streamEventProcessor.completeStreaming();
     }
 
-    // Handle cancellation
     if (wasCancelled) {
       eventBus.emitCancel('Task was cancelled', true, this.getAgentName());
       profileEnd(profileLabel);
@@ -404,18 +372,9 @@ export abstract class BaseAgent
   }
 
   /**
-   * Template method: Get the agent name for logging
-   * @returns Agent name
+   * Template methods for subclasses to implement
    */
   protected abstract getAgentName(): string;
-
-  /**
-   * Template method: Execute agent-specific logic
-   * Each agent handles its own instruction enhancement, agent creation, and execution
-   * @param input - Agent input containing instruction and context
-   * @param config - Optional configuration for LangGraph web compatibility
-   * @returns Parsed agent-specific output
-   */
   protected abstract executeAgent(
     input: AgentInput,
     config?: RunnableConfig
@@ -423,7 +382,6 @@ export abstract class BaseAgent
 
   /**
    * Template method: Create agent-specific tools
-   * @returns Array of tools for the agent
    */
   protected createTools(): any[] {
     return this.toolRegistry?.getLangChainTools() || [];
@@ -431,7 +389,6 @@ export abstract class BaseAgent
 
   /**
    * Template method: Get tool registry for streaming display
-   * @returns Tool registry or undefined
    */
   protected getToolRegistry(): ToolRegistry | undefined {
     return this.toolRegistry;
@@ -439,13 +396,10 @@ export abstract class BaseAgent
 
   /**
    * Get LLM provider using current user settings
-   * This method creates the LLM fresh each time to ensure latest settings are used
-   * @returns Promise resolving to configured LLM provider
    */
   protected async getLLM(): Promise<BaseChatModel> {
     try {
       const llm = await LangChainProviderFactory.createLLM();
-
       return llm;
     } catch (error) {
       const errorMessage =
@@ -476,9 +430,7 @@ export abstract class BaseAgent
     const selectedTabIds =
       this.executionContext.getSelectedTabIds() || undefined;
 
-    // User has selected tabs
     if (selectedTabIds && selectedTabIds.length > 1) {
-      // Multi-tab context - get detailed information about all selected tabs
       const tabInfoList: Array<{
         id: number;
         title: string;
@@ -498,7 +450,7 @@ export abstract class BaseAgent
             domain: tabDomain,
           });
         } catch (error) {
-          // If tab can't be accessed, add basic info don't add it to the list
+          // If tab can't be accessed, don't add it to the list
         }
       }
 
@@ -519,22 +471,12 @@ export abstract class BaseAgent
   ): Promise<void> {
     try {
       if (event.event === "on_chat_model_end") {
-        // on_chat_model_end is called when the chat model is done
-        // This could either AIChunk message -- which is AI thinking; where content is present
-        // This could also be AI calling the tool -- which is AI calling the tool where content is not present
-        // we want to extract the output of that message and add to our message manager
-        // Tip: Put breakpoint here to see how the event looks like
-
         if (event.data?.output instanceof AIMessageChunk) {
           this.executionContext.messageManager.addAIMessage(
             event.data?.output.text
           );
         }
       } else if (event.event === "on_tool_end") {
-        // on_tool_end is called when a tool is executed
-        // we want to extract the output of that message and add to our message manager
-        // Tip: Put breakpoint here to see how the event looks like
-
         const output = event.data?.output;
         const toolName = event.name || "unknown";
 
@@ -545,13 +487,11 @@ export abstract class BaseAgent
         ) {
           const actionResults = streamEventProcessor.getActionResults();
 
-          // Find the most recent ActionResult for this tool
           const recentResult = actionResults
             .filter((ar: any) => ar.toolName === toolName)
             .pop();
 
           if (recentResult && recentResult.includeInMemory) {
-            // Use extracted content if available (for search_text and interact)
             const contentToAdd =
               recentResult.extractedContent ||
               (output instanceof ToolMessage
@@ -567,30 +507,20 @@ export abstract class BaseAgent
           }
         }
       }
-      // For other event types, we don't need to sync yet
     } catch (error) {
-      // Log the error but don't throw to avoid breaking the stream
       this.log(`Error syncing LangChain and MessageManager: ${error}`, "error");
     }
   }
 
-  /**
-   * Log a message if debug mode is enabled
-   * @param message - Message to log
-   * @param level - Log level
-   * @param data - Optional structured data for debugging
-   */
   protected log(
     message: string,
     level: "info" | "warning" | "error" = "info",
     data?: any
   ): void {
-    // Always log to console in debug mode or for errors
     if (this.debugMode || level === "error") {
       Logging.log(this.getAgentName(), message, level);
     }
     
-    // Send to UI via EventBus if debug mode is on and EventBus is available
     if (this.debugMode && this.currentEventBus && level !== "error") {
       this.currentEventBus.emitDebugMessage(`[${this.getAgentName()}] ${message}`, data, this.getAgentName());
     }
@@ -598,9 +528,14 @@ export abstract class BaseAgent
 
   public async cleanup(): Promise<void> {
     try {
+      this._toolSet = null;
+      this._promptStrategy = null;
+      this._executionStrategy = null;
+      
       await this.executionContext.browserContext.cleanup();
+      
     } catch (error) {
-      this.log(`Failed to cleanup browser context: ${error}`, "error");
+      this.log(`Failed to cleanup: ${error}`, "error");
     }
   }
 

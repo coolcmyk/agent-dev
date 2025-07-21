@@ -122,24 +122,47 @@ Respond with a JSON object containing the task_type.`;
 
 // Prompt Strategy Factory
 export class PromptStrategyFactory {
+  private static cache = new Map<string, IPromptStrategy>();
+  
   static createStrategy(agentType: string, toolDocs?: string): IPromptStrategy {
+    const cacheKey = `${agentType}:${toolDocs || 'default'}`;
+    
+    if (this.cache.has(cacheKey)) {
+      return this.cache.get(cacheKey)!;
+    }
+    
+    let strategy: IPromptStrategy;
     switch (agentType) {
       case 'productivity':
-        return new ProductivityPromptStrategy(toolDocs || '');
+        strategy = new ProductivityPromptStrategy(toolDocs || '');
+        break;
       case 'answer':
-        return new AnswerPromptStrategy();
+        strategy = new AnswerPromptStrategy();
+        break;
       case 'validator':
-        return new ValidatorPromptStrategy();
+        strategy = new ValidatorPromptStrategy();
+        break;
       case 'planner':
-        return new PlannerPromptStrategy();
+        strategy = new PlannerPromptStrategy();
+        break;
       case 'browse':
-        return new BrowsePromptStrategy(toolDocs || '');
+        strategy = new BrowsePromptStrategy(toolDocs || '');
+        break;
       case 'intent-prediction':
-        return new IntentPredictionPromptStrategy();
+        strategy = new IntentPredictionPromptStrategy();
+        break;
       case 'classification':
-        return new ClassificationPromptStrategy();
+        strategy = new ClassificationPromptStrategy();
+        break;
       default:
         throw new Error(`Unknown prompt strategy: ${agentType}`);
     }
+    
+    this.cache.set(cacheKey, strategy);
+    return strategy;
+  }
+  
+  static clearCache(): void {
+    this.cache.clear();
   }
 }

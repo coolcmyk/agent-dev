@@ -10,8 +10,12 @@ export class ToolRegistry {
   private tools: Map<string, NxtscapeTool> = new Map();
   private toolsByCategory: Map<ToolCategory, NxtscapeTool[]> = new Map();
   private context: ExecutionContext;
+  
+  // ✅ Cache expensive operations
+  private _langChainToolsCache: any[] | null = null;
+  private _systemPromptCache: string | null = null;
 
-  constructor(context: ExecutionContext){
+  constructor(context: ExecutionContext) {
     this.context = context;
   }
   /**
@@ -35,6 +39,9 @@ export class ToolRegistry {
    */
   registerAll(tools: NxtscapeTool[]): void {
     tools.forEach(tool => this.register(tool));
+    // ✅ Invalidate caches when tools change
+    this._langChainToolsCache = null;
+    this._systemPromptCache = null;
   }
 
   /**
@@ -62,16 +69,32 @@ export class ToolRegistry {
    * Get all LangChain tools
    */
   getLangChainTools() {
-    return this.getAll().map(tool => tool.getLangChainTool());
+    if (this._langChainToolsCache === null) {
+      this._langChainToolsCache = this.getAll().map(tool => tool.getLangChainTool());
+    }
+    return this._langChainToolsCache;
   }
 
   /**
    * Generate system prompt for tools
    */
   generateSystemPrompt(categories?: ToolCategory[]): string {
+    const cacheKey = categories?.join(',') || 'all';
+    if (this._systemPromptCache === null) {
+      this._systemPromptCache = this._generateSystemPromptUncached(categories);
+    }
+    return this._systemPromptCache;
+  }
+
+  private _generateSystemPromptUncached(categories?: ToolCategory[]): string {
+    // Your existing implementation
     const tools = categories 
       ? categories.flatMap(cat => this.getByCategory(cat))
       : this.getAll();
+
+    if (tools.length === 0) {
+      return "## Available Tools\n\nNo tools available for this agent.";
+    }
 
     const toolDocs = tools.map(tool => {
       const config = tool.getConfig();
@@ -124,4 +147,4 @@ export class ToolRegistry {
       return version >= requiredVersion;
     });
   }
-} 
+}

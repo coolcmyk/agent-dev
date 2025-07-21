@@ -16,6 +16,7 @@ export interface IToolSet {
 
 export class ProductivityToolSet implements IToolSet {
   private registry: ToolRegistry;
+  private _toolsCache: any[] | null = null; // ✅ Cache tools
   
   constructor(context: ExecutionContext) {
     this.registry = new ToolRegistry(context);
@@ -28,8 +29,11 @@ export class ProductivityToolSet implements IToolSet {
   }
   
   createTools(context: ExecutionContext): any[] {
-    const plugin = new ProductivityPlugin();
-    return plugin.getTools(context);
+    if (this._toolsCache === null) {
+      const plugin = new ProductivityPlugin();
+      this._toolsCache = plugin.getTools(context);
+    }
+    return this._toolsCache;
   }
   
   getToolRegistry(): ToolRegistry {
@@ -183,13 +187,37 @@ export class ToolSetFactory {
     ['classification', (ctx) => new ClassificationToolSet(ctx)],
     ['empty', (ctx) => new EmptyToolSet(ctx)]
   ]);
+  private static toolSetCache = new Map<string, IToolSet>();
   
   static createToolSet(type: string, context: ExecutionContext): IToolSet {
+    // ✅ Use a fallback for context ID since ExecutionContext doesn't have an id property
+    const contextId = (context as any).id || context.constructor.name || 'default';
+    const cacheKey = `${type}:${contextId}`;
+    
+    if (this.toolSetCache.has(cacheKey)) {
+      return this.toolSetCache.get(cacheKey)!;
+    }
+    
     const factory = this.toolSets.get(type);
     if (!factory) {
       throw new Error(`Unknown tool set type: ${type}`);
     }
-    return factory(context);
+    
+    const toolSet = factory(context);
+    this.toolSetCache.set(cacheKey, toolSet);
+    return toolSet;
+  }
+
+  static clearCache(): void {
+    this.toolSetCache.clear();
+  }
+
+  static clearCacheForContext(contextId: string): void {
+    for (const [key] of this.toolSetCache) {
+      if (key.includes(contextId)) {
+        this.toolSetCache.delete(key);
+      }
+    }
   }
 
   /**
